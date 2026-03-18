@@ -1,5 +1,8 @@
 from fastapi import FastAPI
 
+from app.domains.auth.adapter.inbound.api.auth_router import router as auth_router
+from app.domains.kakao_auth.adapter.inbound.api.kakao_authentication_router import router as kakao_authentication_router
+from app.domains.news_analyzer.adapter.inbound.api.news_analyzer_router import router as news_analyzer_router
 from app.domains.news_search.adapter.inbound.api.news_search_router import router as news_search_router
 from app.domains.stock_collector.adapter.inbound.api.collector_router import router as collector_router
 from app.domains.stock_collector.infrastructure.orm.raw_article_orm import RawArticleORM  # noqa: F401
@@ -18,11 +21,14 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(debug=settings.debug)
 
+app.include_router(auth_router)
+app.include_router(kakao_authentication_router)
 app.include_router(post_router)
 app.include_router(news_search_router)
 app.include_router(saved_article_router)
 app.include_router(watchlist_router)
 app.include_router(collector_router)
+app.include_router(news_analyzer_router)
 
 
 @app.get("/")

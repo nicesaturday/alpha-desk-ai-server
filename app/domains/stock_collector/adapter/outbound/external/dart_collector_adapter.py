@@ -67,5 +67,19 @@ class DartCollectorAdapter(CollectorPort):
 
         return articles
 
+    # 종목코드 → DART 고유번호 매핑
+    SYMBOL_TO_CORP_CODE = {
+        "005930": "00126380",  # 삼성전자
+        "000660": "00164779",  # SK하이닉스
+        "035420": "00401731",  # 네이버
+        "035720": "00918444",  # 카카오
+        "373220": "01596594",  # LG에너지솔루션
+        "005380": "00164742",  # 현대차
+        "000270": "00113971",  # 기아
+        "051910": "00131485",  # LG화학
+        "006400": "00131372",  # 삼성SDI
+        "068270": "00259103",  # 셀트리온
+    }
+
     def _get_corp_code(self, symbol: str) -> str:
-        return symbol
+        return self.SYMBOL_TO_CORP_CODE.get(symbol, symbol)
