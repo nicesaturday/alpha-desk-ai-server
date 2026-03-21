@@ -1,4 +1,4 @@
-from typing import List
+from typing import Dict, List
 
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.orm import Session
@@ -44,3 +44,17 @@ class StockRepositoryImpl(StockRepositoryPort):
 
     def count(self) -> int:
         return self._db.query(StockORM).count()
+
+    def update_market_bulk(self, market_map: Dict[str, str]) -> int:
+        if not market_map:
+            return 0
+        updated = 0
+        for symbol, market in market_map.items():
+            count = (
+                self._db.query(StockORM)
+                .filter(StockORM.symbol == symbol)
+                .update({"market": market})
+            )
+            updated += count
+        self._db.commit()
+        return updated

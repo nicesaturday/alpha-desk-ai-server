@@ -5,10 +5,12 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.domains.stock.adapter.outbound.external.dart_corp_code_adapter import DartCorpCodeAdapter
+from app.domains.stock.adapter.outbound.external.krx_market_adapter import KrxMarketAdapter
 from app.domains.stock.adapter.outbound.persistence.stock_repository_impl import StockRepositoryImpl
 from app.domains.stock.application.response.stock_response import StockResponse
 from app.domains.stock.application.usecase.search_stock_usecase import SearchStockUseCase
 from app.domains.stock.application.usecase.sync_corp_code_usecase import SyncCorpCodeUseCase
+from app.domains.stock.application.usecase.sync_market_usecase import SyncMarketUseCase
 from app.infrastructure.database.session import get_db
 from sqlalchemy.orm import Session
 
@@ -17,6 +19,7 @@ router = APIRouter(prefix="/stocks", tags=["stocks"])
 logger = logging.getLogger(__name__)
 
 _dart_adapter = DartCorpCodeAdapter()
+_krx_market_adapter = KrxMarketAdapter()
 
 
 @router.get("/search", response_model=List[StockResponse])
@@ -37,4 +40,16 @@ async def sync_corp_codes(db: Session = Depends(get_db)):
         return {"synced": count}
     except Exception as e:
         logger.error(f"[SyncCorpCode] 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sync-market", response_model=dict)
+async def sync_market(db: Session = Depends(get_db)):
+    """KRX KIND에서 KOSPI/KOSDAQ/KONEX 시장구분을 가져와 DB에 업데이트한다"""
+    try:
+        usecase = SyncMarketUseCase(_krx_market_adapter, StockRepositoryImpl(db))
+        count = await asyncio.to_thread(usecase.execute)
+        return {"updated": count}
+    except Exception as e:
+        logger.error(f"[SyncMarket] 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
