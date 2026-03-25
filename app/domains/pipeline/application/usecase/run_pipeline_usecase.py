@@ -1,7 +1,7 @@
 import asyncio
 import logging
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Awaitable, Callable, Optional
 
 from app.domains.pipeline.application.response.analysis_log_response import AnalysisLogResponse
 from app.domains.pipeline.application.response.stock_summary_response import StockSummaryResponse
@@ -14,6 +14,17 @@ logger = logging.getLogger(__name__)
 
 NEWS_SOURCE_TYPES = {"NEWS"}
 REPORT_SOURCE_TYPES = {"DISCLOSURE", "REPORT"}
+
+OnEvent = Callable[[dict], Awaitable[None]]
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _emit(on_event: Optional[OnEvent], event: dict) -> None:
+    if on_event:
+        await on_event(event)
 
 
 class RunPipelineUseCase:
@@ -32,14 +43,14 @@ class RunPipelineUseCase:
         self._collectors = collectors
         self._normalize_usecase = normalize_usecase
         self._analysis_usecase = analysis_usecase
-        self._on_progress = on_progress
         self._stock_repository = stock_repository
 
-    def _progress(self, msg: str):
-        if self._on_progress:
-            self._on_progress(msg)
-
-    async def execute(self, selected_symbols: Optional[list[str]] = None, account_id: Optional[int] = None) -> dict:
+    async def execute(
+        self,
+        selected_symbols: Optional[list[str]] = None,
+        account_id: Optional[int] = None,
+        on_event: Optional[OnEvent] = None,
+    ) -> dict:
         watchlist_items = self._watchlist_repository.find_all(account_id=account_id)
         if not watchlist_items:
             return {"message": "관심종목이 없습니다.", "processed": [], "summaries": [], "report_summaries": [], "logs": []}
@@ -51,7 +62,12 @@ class RunPipelineUseCase:
                 return {"message": "선택한 관심종목이 없습니다.", "processed": [], "summaries": [], "report_summaries": [], "logs": []}
 
         total = len(watchlist_items)
-        self._progress(f"관심종목 {total}개 파이프라인 시작")
+        await _emit(on_event, {
+            "type": "progress",
+            "phase": "START",
+            "at": _now(),
+            "message": f"관심종목 {total}개 파이프라인 시작",
+        })
 
         # Phase 1: 수집 (순차 — DB 세션 공유)
         no_article_symbols = []
@@ -60,37 +76,79 @@ class RunPipelineUseCase:
         for idx, item in enumerate(watchlist_items, 1):
             symbol = item.symbol
             name = item.name
-            self._progress(f"[{idx}/{total}] {name}({symbol}) 기사 수집 중...")
+            await _emit(on_event, {
+                "type": "progress",
+                "phase": "COLLECT",
+                "symbol": symbol,
+                "at": _now(),
+                "message": f"[{idx}/{total}] {name}({symbol}) 기사 수집 중...",
+                "progress": {"current": idx, "total": total},
+            })
             try:
                 collect_usecase = CollectArticlesUseCase(self._raw_article_repository, self._collectors, self._stock_repository)
                 await asyncio.to_thread(collect_usecase.execute, symbol)
             except Exception as e:
                 logger.error(f"[Pipeline] {name}({symbol}) 수집 중 오류: {e}")
-                self._progress(f"[{idx}/{total}] {name}({symbol}) 수집 오류 — 건너뜁니다")
+                await _emit(on_event, {
+                    "type": "error",
+                    "phase": "COLLECT",
+                    "symbol": symbol,
+                    "at": _now(),
+                    "message": f"[{idx}/{total}] {name}({symbol}) 수집 오류 — 건너뜁니다",
+                })
                 no_article_symbols.append(symbol)
                 continue
 
             raw_articles = self._raw_article_repository.find_all(symbol=symbol)
             if not raw_articles:
-                self._progress(f"[{idx}/{total}] {name} — 수집된 기사 없음, 건너뜀")
+                await _emit(on_event, {
+                    "type": "progress",
+                    "phase": "COLLECT",
+                    "symbol": symbol,
+                    "at": _now(),
+                    "message": f"[{idx}/{total}] {name} — 수집된 기사 없음, 건너뜀",
+                })
                 no_article_symbols.append(symbol)
                 continue
 
             news_articles = [r for r in raw_articles if r.source_type in NEWS_SOURCE_TYPES]
             report_articles = [r for r in raw_articles if r.source_type in REPORT_SOURCE_TYPES]
-            self._progress(f"[{idx}/{total}] {name} — 뉴스 {len(news_articles)}건, 공시 {len(report_articles)}건 수집 완료")
+            await _emit(on_event, {
+                "type": "progress",
+                "phase": "COLLECT",
+                "symbol": symbol,
+                "at": _now(),
+                "message": f"[{idx}/{total}] {name} — 뉴스 {len(news_articles)}건, 공시 {len(report_articles)}건 수집 완료",
+            })
             symbol_data[symbol] = (item.name, news_articles[:1], report_articles[:1])
 
-        self._progress(f"수집 완료. {len(symbol_data)}개 종목 AI 분석 시작...")
+        await _emit(on_event, {
+            "type": "progress",
+            "phase": "COLLECT",
+            "at": _now(),
+            "message": f"수집 완료. {len(symbol_data)}개 종목 AI 분석 시작...",
+        })
 
         # Phase 2: AI 분석 (병렬 — DB 미사용)
         async def analyze_pair(symbol: str, name: str, news_arts, report_arts):
-            self._progress(f"{name}({symbol}) AI 분석 중...")
+            await _emit(on_event, {
+                "type": "progress",
+                "phase": "ANALYZE",
+                "symbol": symbol,
+                "at": _now(),
+                "message": f"{name}({symbol}) AI 분석 중...",
+            })
             news_best, report_best = await asyncio.gather(
                 self._analyze_best(news_arts, symbol),
                 self._analyze_best(report_arts, symbol),
             )
-            self._progress(f"{name}({symbol}) 분석 완료")
+            await _emit(on_event, {
+                "type": "progress",
+                "phase": "ANALYZE",
+                "symbol": symbol,
+                "at": _now(),
+                "message": f"{name}({symbol}) 분석 완료",
+            })
             return symbol, name, news_best, report_best
 
         analysis_results = await asyncio.gather(*[
@@ -154,7 +212,12 @@ class RunPipelineUseCase:
             else:
                 results.append({"symbol": symbol, "skipped": True, "reason": "분석 실패"})
 
-        self._progress(f"✅ 파이프라인 완료 — 뉴스 {len(summaries)}건, 공시·리포트 {len(report_summaries)}건")
+        await _emit(on_event, {
+            "type": "progress",
+            "phase": "DONE",
+            "at": _now(),
+            "message": f"✅ 파이프라인 완료 — 뉴스 {len(summaries)}건, 공시·리포트 {len(report_summaries)}건",
+        })
 
         return {
             "message": "파이프라인 완료",

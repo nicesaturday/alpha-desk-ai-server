@@ -1,5 +1,6 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 
+from sqlalchemy import func, or_
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.orm import Session
 
@@ -15,17 +16,25 @@ class StockRepositoryImpl(StockRepositoryPort):
         self._db = db
 
     def search_by_name(self, keyword: str, limit: int = 20) -> List[Stock]:
-        from sqlalchemy import or_
+        kw = keyword.strip()
+        pattern = f"%{kw}%"
+        pattern_sym = f"%{kw.lower()}%"
         orms = (
             self._db.query(StockORM)
-            .filter(or_(
-                StockORM.name.like(f"%{keyword}%"),
-                StockORM.symbol.like(f"%{keyword}%"),
-            ))
+            .filter(
+                or_(
+                    StockORM.name.like(pattern),
+                    func.lower(StockORM.symbol).like(pattern_sym),
+                )
+            )
             .limit(limit)
             .all()
         )
         return [StockMapper.to_entity(o) for o in orms]
+
+    def find_market_by_symbol(self, symbol: str) -> Optional[str]:
+        row = self._db.query(StockORM).filter(StockORM.symbol == symbol).one_or_none()
+        return row.market if row else None
 
     def bulk_upsert(self, stocks: List[Stock]) -> int:
         if not stocks:
@@ -54,3 +63,17 @@ class StockRepositoryImpl(StockRepositoryPort):
         if orm is None:
             return None
         return StockMapper.to_entity(orm)
+
+    def update_market_bulk(self, market_map: Dict[str, str]) -> int:
+        if not market_map:
+            return 0
+        updated = 0
+        for symbol, market in market_map.items():
+            count = (
+                self._db.query(StockORM)
+                .filter(StockORM.symbol == symbol)
+                .update({"market": market})
+            )
+            updated += count
+        self._db.commit()
+        return updated

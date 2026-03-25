@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from datetime import datetime
 from hashlib import sha256
@@ -12,16 +13,48 @@ from app.infrastructure.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+SYMBOL_TO_ENGLISH = {
+    "005930": "Samsung Electronics",
+    "000660": "SK Hynix",
+    "035420": "NAVER",
+    "035720": "Kakao",
+    "373220": "LG Energy Solution",
+    "005380": "Hyundai Motor",
+    "000270": "Kia",
+    "051910": "LG Chem",
+    "006400": "Samsung SDI",
+    "068270": "Celltrion",
+    "060250": "NHN KCP",
+}
+
+_STOCK_CODE_PATTERN = re.compile(r"^\d{6}$|^[A-Z]{1,5}(\.B)?$")
+
 
 class NewsCollectorAdapter(CollectorPort):
     SERP_API_URL = "https://serpapi.com/search"
 
     def collect(self, symbol: str, stock_name: str, corp_code: str) -> List[RawArticle]:
-        settings = get_settings()
+        if not _STOCK_CODE_PATTERN.match(symbol):
+            logger.warning(f"[NewsCollector] symbol이 코드 형식이 아닙니다: '{symbol}' — 수집을 건너뜁니다.")
+            return []
 
+        settings = get_settings()
+        korean_keyword = stock_name
+
+        articles = self._fetch(symbol, korean_keyword, settings)
+
+        if not articles:
+            english_keyword = SYMBOL_TO_ENGLISH.get(symbol)
+            if english_keyword:
+                logger.debug(f"[NewsCollector] 한글 검색 결과 없음, 영문 fallback: '{english_keyword}'")
+                articles = self._fetch(symbol, english_keyword, settings)
+
+        return articles
+
+    def _fetch(self, symbol: str, keyword: str, settings) -> List[RawArticle]:
         params = {
             "engine": "google_news",
-            "q": stock_name,
+            "q": keyword,
             "api_key": settings.serp_api_key,
             "num": "10",
         }
