@@ -26,6 +26,7 @@ class ExtractNounsUseCase:
         order: str = "relevance",
         max_per_video: int = 20,
         top_n: int = 30,
+        watchlist_stocks: List[str] = [],
     ) -> NounFrequencyResponse:
         """
         :param video_ids: market_videos 테이블에서 조회한 video_id 목록
@@ -49,7 +50,7 @@ class ExtractNounsUseCase:
                 raw_nouns = self._morph_port.extract_nouns(comment.content)
                 all_nouns.extend(self._service.filter_nouns(raw_nouns))
 
-        freq = self._service.count_frequencies(all_nouns)
+        freq = self._service.count_frequencies(all_nouns, watchlist_stocks)
         top_items = list(freq.items())[:top_n]
 
         top_keywords = [NounFrequencyItem(noun=noun, count=count) for noun, count in top_items]
