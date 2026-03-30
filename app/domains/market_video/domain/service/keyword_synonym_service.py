@@ -12,6 +12,12 @@ class KeywordSynonymService:
             for synonym in synonyms:
                 self._mapping[synonym] = representative
 
+    def add_watchlist_stocks(self, stock_names: list[str]) -> None:
+        """watchlist 종목명을 동의어 테이블에 없는 경우 대표키로 등록한다."""
+        for name in stock_names:
+            if name not in self._mapping:
+                self._mapping[name] = name
+
     def normalize(self, noun: str) -> str:
         return self._mapping.get(noun, noun)
 

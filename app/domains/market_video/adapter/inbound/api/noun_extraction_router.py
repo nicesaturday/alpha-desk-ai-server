@@ -8,6 +8,7 @@ from app.domains.market_video.adapter.outbound.external.youtube_comment_adapter 
 from app.domains.market_video.application.response.noun_frequency_response import NounFrequencyResponse
 from app.domains.market_video.application.usecase.extract_nouns_usecase import ExtractNounsUseCase
 from app.domains.market_video.infrastructure.orm.market_video_orm import MarketVideoORM
+from app.domains.watchlist.infrastructure.orm.watchlist_item_orm import WatchlistItemORM
 from app.infrastructure.cache.redis_client import redis_client
 from app.infrastructure.database.session import get_db
 from app.infrastructure.nlp.kiwi_morph_analyzer import KiwiMorphAnalyzer
@@ -34,6 +35,13 @@ async def extract_nouns(
 
     video_ids = [row.video_id for row in db.query(MarketVideoORM.video_id).all()]
 
+    watchlist_stocks = [
+        row.name
+        for row in db.query(WatchlistItemORM.name)
+        .filter(WatchlistItemORM.account_id == session.user_id)
+        .all()
+    ]
+
     usecase = ExtractNounsUseCase(
         comment_port=YoutubeCommentAdapter(),
         morph_port=KiwiMorphAnalyzer(),
@@ -43,4 +51,5 @@ async def extract_nouns(
         order=order,
         max_per_video=max_per_video,
         top_n=top_n,
+        watchlist_stocks=watchlist_stocks,
     )
