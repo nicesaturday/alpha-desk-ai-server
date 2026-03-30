@@ -13,6 +13,9 @@ from app.domains.board.application.usecase.get_board_list_usecase import GetBoar
 from app.domains.board.application.usecase.get_board_read_usecase import GetBoardReadUseCase
 from app.domains.board.application.usecase.update_board_usecase import UpdateBoardUseCase
 from app.domains.board.domain.entity.board import Board
+from app.domains.card_share.adapter.outbound.persistence.card_share_repository_impl import (
+    CardShareRepositoryImpl,
+)
 from app.infrastructure.cache.redis_client import redis_client
 from app.infrastructure.database.session import get_db
 
@@ -24,6 +27,7 @@ _session_adapter = RedisSessionAdapter(redis_client)
 class CreateBoardRequest(BaseModel):
     title: str
     content: str
+    shared_card_id: Optional[int] = None
 
 
 class UpdateBoardRequest(BaseModel):
@@ -46,11 +50,22 @@ async def create_board(
     if not account:
         raise HTTPException(status_code=401, detail="존재하지 않는 계정입니다.")
 
+    shared_card_id_opt: Optional[int] = None
+    if request.shared_card_id is not None:
+        card_repo = CardShareRepositoryImpl(db)
+        card = card_repo.find_by_id(request.shared_card_id)
+        if not card:
+            raise HTTPException(status_code=400, detail="존재하지 않는 공유 카드입니다.")
+        if card.sharer_account_id != parsed_account_id:
+            raise HTTPException(status_code=403, detail="본인이 공유한 카드만 게시글에 연결할 수 있습니다.")
+        shared_card_id_opt = request.shared_card_id
+
     board_repository = BoardRepositoryImpl(db)
     saved = board_repository.save(Board(
         title=request.title,
         content=request.content,
         account_id=parsed_account_id,
+        shared_card_id=shared_card_id_opt,
     ))
 
     return BoardListItemResponse(
@@ -60,6 +75,7 @@ async def create_board(
         nickname=account.nickname,
         created_at=saved.created_at,
         updated_at=saved.updated_at,
+        shared_card_id=saved.shared_card_id,
     )
 
 
@@ -173,4 +189,5 @@ async def get_board(
         nickname=account.nickname if account else "알 수 없음",
         created_at=board.created_at,
         updated_at=board.updated_at,
+        shared_card_id=board.shared_card_id,
     )
