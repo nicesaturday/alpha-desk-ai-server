@@ -2,33 +2,35 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
-from app.domains.market_analysis.application.usecase.question_analyzer_port import QuestionAnalyzerPort
+from app.domains.market_analysis.application.usecase.langchain_qa_port import LangChainQAPort
+from app.domains.market_analysis.domain.entity.analysis_answer import AnalysisAnswer
 
-_SYSTEM_PROMPT = """\
-당신은 Alpha-Desk 주식 테마 분석 도우미입니다.
-아래에 제공된 종목/테마 데이터만을 근거로 사용자의 질문에 사실 기반으로 답변하세요.
+_OUT_OF_SCOPE_MARKER = "범위를 벗어납니다"
+
+_SYSTEM_PROMPT = """당신은 주식 시장 분석 AI 어시스턴트입니다.
+아래는 사용자의 관심종목과 각 종목의 테마 정보입니다:
 
 {context}
 
-[답변 규칙]
-1. 위 데이터에 포함된 종목 및 테마와 관련된 질문에만 답변하세요.
-2. 투자 추천, 매수/매도 의견은 절대 제시하지 마세요. 사실 기반 정보 요약만 제공하세요.
-3. 위 데이터와 관련 없는 질문(주식/테마 분석과 무관한 질문)은 반드시 다음 문장으로만 응답하세요:
-   "이 서비스는 Alpha-Desk에 등록된 주식 테마 분석을 위한 서비스입니다. 해당 질문은 제공 가능한 범위를 벗어납니다."
-4. 답변은 한국어로 작성하세요.\
-"""
+위 관심종목 정보를 바탕으로 사용자의 질문에 답변하세요.
+- 질문이 관심종목 또는 관련 테마와 무관할 경우 "죄송합니다. 해당 질문은 관심종목 분석 범위를 벗어납니다."라고 안내하세요.
+- 투자 추천·매수·매도 의견은 제공하지 마세요.
+- 답변은 한국어로 작성하세요."""
 
 
-class LangchainQaAdapter(QuestionAnalyzerPort):
-    """LangChain LCEL 체인을 사용하여 종목/테마 컨텍스트 기반 질문 답변을 생성한다."""
-
-    def __init__(self, api_key: str, model: str):
-        llm = ChatOpenAI(model=model, api_key=api_key)
+class LangChainQAAdapter(LangChainQAPort):
+    def __init__(self, api_key: str, model: str = "gpt-4o-mini"):
+        llm = ChatOpenAI(api_key=api_key, model=model)
         prompt = ChatPromptTemplate.from_messages([
             ("system", _SYSTEM_PROMPT),
             ("human", "{question}"),
         ])
         self._chain = prompt | llm | StrOutputParser()
 
-    async def analyze(self, context: str, question: str) -> str:
-        return await self._chain.ainvoke({"context": context, "question": question})
+    def ask(self, question: str, context: str) -> AnalysisAnswer:
+        try:
+            answer = self._chain.invoke({"context": context, "question": question})
+            in_scope = _OUT_OF_SCOPE_MARKER not in answer
+            return AnalysisAnswer(answer=answer, in_scope=in_scope)
+        except Exception as e:
+            return AnalysisAnswer(answer=f"분석 중 오류가 발생했습니다: {e}", in_scope=False)
