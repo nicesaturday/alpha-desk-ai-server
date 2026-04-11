@@ -7,6 +7,14 @@ class Settings(BaseSettings):
     mysql_host: str
     mysql_port: int
     mysql_database: str
+    # BL-BE-54: PostgreSQL — 비정형 데이터 저장용
+    pg_host: str = "localhost"
+    pg_port: int = 5432
+    pg_user: str = "postgres"
+    pg_password: str = ""
+    pg_database: str = "alphadesk_raw"
+    pg_pool_size: int = 5
+    pg_max_overflow: int = 20
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str = ""
@@ -16,6 +24,8 @@ class Settings(BaseSettings):
     kakao_client_secret: str = ""
     kakao_redirect_uri: str = ""
     serp_api_key: str = ""
+    serp_base_url: str = "https://serpapi.com/search"
+    serp_timeout: float = 10.0
     finnhub_api_key: str = ""
     data_go_kr_service_key: str = ""
     twelve_data_api_key: str = ""
