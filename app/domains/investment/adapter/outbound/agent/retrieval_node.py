@@ -114,10 +114,78 @@ async def _handle_youtube(keyword: str, query: str, company: Optional[str]) -> s
         return "=== YouTube 수집 실패 ===", None
 
 
-async def _handle_stock(keyword: str) -> SourceResult:
-    """[Retrieval][종목] 종목 기본 정보 수집 (향후 구현)."""
-    await aemit(f"[Retrieval][종목] 향후 구현 예정 | keyword={keyword}")
-    return "=== 종목 기본 정보: 향후 구현 예정 ===", None
+async def _handle_stock(keyword: str, company: Optional[str] = None) -> SourceResult:
+    """[Retrieval][종목] DART 재무제표 + 공시 수집.
+
+    흐름:
+        stocks DB에서 종목명으로 corp_code 조회
+        → DartReportCollectorAdapter(재무제표) + DartCollectorAdapter(공시) 병렬 수집
+    """
+    from app.domains.stock.infrastructure.orm.stock_orm import StockORM
+    from app.infrastructure.database.session import SessionLocal
+    from app.domains.stock_collector.adapter.outbound.external.dart_report_collector_adapter import DartReportCollectorAdapter
+    from app.domains.stock_collector.adapter.outbound.external.dart_collector_adapter import DartCollectorAdapter
+
+    search_name = company or keyword
+    await aemit(f"[Retrieval][종목] ▶ 시작 | keyword={search_name}")
+
+    loop = asyncio.get_event_loop()
+
+    def _lookup_stock():
+        db = SessionLocal()
+        try:
+            orm = db.query(StockORM).filter(StockORM.name == search_name).first()
+            if not orm:
+                orm = db.query(StockORM).filter(StockORM.name.like(f"%{search_name}%")).first()
+            return orm
+        finally:
+            db.close()
+
+    stock_orm = await loop.run_in_executor(None, _lookup_stock)
+
+    if not stock_orm:
+        await aemit(f"[Retrieval][종목] ⚠ 종목 미등록: {search_name}")
+        return f"=== 종목 정보 없음: {search_name} (DB 미등록) ===", None
+
+    symbol = stock_orm.symbol
+    stock_name = stock_orm.name
+    corp_code = stock_orm.corp_code
+    await aemit(f"[Retrieval][종목] ◀ 종목 확인: {stock_name}({symbol}) corp_code={corp_code}")
+
+    def _collect_financial():
+        return DartReportCollectorAdapter().collect(symbol=symbol, stock_name=stock_name, corp_code=corp_code)
+
+    def _collect_disclosures():
+        return DartCollectorAdapter().collect(symbol=symbol, stock_name=stock_name, corp_code=corp_code)
+
+    await aemit(f"[Retrieval][종목] → DART 재무제표 + 공시 병렬 수집 시작")
+    financial_articles, disclosure_articles = await asyncio.gather(
+        loop.run_in_executor(None, _collect_financial),
+        loop.run_in_executor(None, _collect_disclosures),
+    )
+
+    lines = [f"=== 종목 정보: {stock_name}({symbol}) ==="]
+
+    if financial_articles:
+        for a in financial_articles:
+            lines.append(f"\n{a.body_text}")
+        await aemit(f"[Retrieval][종목] ✓ 재무제표 {len(financial_articles)}건")
+    else:
+        lines.append("\n[재무제표] 데이터 없음")
+        await aemit(f"[Retrieval][종목] ⚠ 재무제표 없음")
+
+    if disclosure_articles:
+        lines.append(f"\n[최근 공시 {len(disclosure_articles)}건]")
+        for a in disclosure_articles:
+            lines.append(f"- {a.title} ({a.published_at})")
+        await aemit(f"[Retrieval][종목] ✓ 공시 {len(disclosure_articles)}건")
+    else:
+        lines.append("\n[최근 공시] 없음")
+        await aemit(f"[Retrieval][종목] ⚠ 공시 없음")
+
+    result_text = "\n".join(lines)
+    await aemit(f"[Retrieval][종목] ◀ 완료 | {len(result_text)}자")
+    return result_text, None
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +197,7 @@ async def _handle_stock(keyword: str) -> SourceResult:
 SOURCE_REGISTRY: dict[str, SourceFactory] = {
     "뉴스":         lambda kw, q, c: _handle_news(kw, c),
     "YouTube 영상": lambda kw, q, c: _handle_youtube(kw, q, c),
-    "종목":         lambda kw, q, c: _handle_stock(kw),
+    "종목":         lambda kw, q, c: _handle_stock(kw, c),
 }
 
 
