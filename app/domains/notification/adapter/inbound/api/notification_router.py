@@ -42,7 +42,12 @@ def _resolve_account_id(
 async def create_notification(
     request: CreateNotificationRequest,
     db: Session = Depends(get_db),
+    account_id: Optional[str] = Cookie(default=None),
+    user_token: Optional[str] = Cookie(default=None),
 ):
+    aid = _resolve_account_id(account_id, user_token)
+    if aid is None:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
     repository = NotificationRepositoryImpl(db)
     usecase = CreateNotificationUseCase(repository)
     notification = usecase.execute(request)
