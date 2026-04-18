@@ -15,6 +15,94 @@ from app.domains.investment.infrastructure.orm.investment_youtube_comment_orm im
 from app.infrastructure.database.session import SessionLocal
 from app.infrastructure.database.pg_session import PgSessionLocal
 
+# ---------------------------------------------------------------------------
+# 댓글 조회 (감성 분석 UseCase용)
+# ---------------------------------------------------------------------------
+
+def fetch_video_ids_by_company(company: str, max_logs: int = 3) -> list[str]:
+    """MySQL: 종목명으로 최근 수집 log의 video_id 목록을 반환한다.
+
+    정확 일치 → 유사 검색(LIKE) 순으로 시도한다.
+    max_logs 개의 최근 로그에 속한 영상 ID만 반환한다.
+    """
+    mysql_db = SessionLocal()
+    try:
+        logs = (
+            mysql_db.query(InvestmentYouTubeLogORM)
+            .filter(InvestmentYouTubeLogORM.company == company)
+            .order_by(InvestmentYouTubeLogORM.created_at.desc())
+            .limit(max_logs)
+            .all()
+        )
+        if not logs:
+            logs = (
+                mysql_db.query(InvestmentYouTubeLogORM)
+                .filter(InvestmentYouTubeLogORM.company.like(f"%{company}%"))
+                .order_by(InvestmentYouTubeLogORM.created_at.desc())
+                .limit(max_logs)
+                .all()
+            )
+        log_ids = [log.id for log in logs]
+        if not log_ids:
+            print(f"[Repository] ⚠ company={company!r} 수집 로그 없음")
+            return []
+
+        videos = (
+            mysql_db.query(InvestmentYouTubeVideoORM)
+            .filter(InvestmentYouTubeVideoORM.log_id.in_(log_ids))
+            .all()
+        )
+        video_ids = [v.video_id for v in videos]
+        print(f"[Repository] company={company!r} → log {len(log_ids)}건 → video {len(video_ids)}건")
+        return video_ids
+    finally:
+        mysql_db.close()
+
+
+def fetch_video_ids_by_log_id(log_id: int) -> list[str]:
+    """MySQL: log_id로 video_id 목록을 반환한다."""
+    mysql_db = SessionLocal()
+    try:
+        videos = (
+            mysql_db.query(InvestmentYouTubeVideoORM)
+            .filter(InvestmentYouTubeVideoORM.log_id == log_id)
+            .all()
+        )
+        video_ids = [v.video_id for v in videos]
+        print(f"[Repository] log_id={log_id} → video {len(video_ids)}건")
+        return video_ids
+    finally:
+        mysql_db.close()
+
+
+def fetch_comment_texts(video_ids: list[str], limit: int = 250) -> list[str]:
+    """PostgreSQL: video_id 목록에 속한 댓글 텍스트를 최신순으로 반환한다.
+
+    Args:
+        video_ids: 조회 대상 video_id 목록
+        limit: 최대 댓글 수 (기본 250건 — LLM 입력 상한)
+
+    Returns:
+        댓글 텍스트 리스트. video_ids 가 비어 있으면 [] 반환.
+    """
+    if not video_ids:
+        print("[Repository] ⚠ video_ids 없음 → 댓글 조회 건너뜀")
+        return []
+    pg_db = PgSessionLocal()
+    try:
+        comments = (
+            pg_db.query(InvestmentYouTubeCommentORM)
+            .filter(InvestmentYouTubeCommentORM.video_id.in_(video_ids))
+            .order_by(InvestmentYouTubeCommentORM.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        texts = [c.text for c in comments]
+        print(f"[Repository] video {len(video_ids)}건 → 댓글 {len(texts)}건 조회")
+        return texts
+    finally:
+        pg_db.close()
+
 
 def _parse_published_at(value: str) -> Optional[datetime]:
     """ISO 8601 문자열을 datetime으로 변환한다. 실패 시 None 반환."""

@@ -2,15 +2,22 @@ import asyncio
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Cookie, HTTPException
+from fastapi import APIRouter, Cookie, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.domains.auth.adapter.outbound.in_memory.redis_session_adapter import RedisSessionAdapter
 from app.domains.investment.adapter.outbound.agent import log_context
 from app.domains.investment.adapter.outbound.external.langgraph_investment_adapter import LangGraphInvestmentAdapter
+from app.domains.investment.adapter.outbound.external.youtube_sentiment_adapter import YouTubeSentimentAdapter
 from app.domains.investment.application.request.investment_decision_request import InvestmentDecisionRequest
+from app.domains.investment.application.request.youtube_sentiment_request import YouTubeSentimentRequest
 from app.domains.investment.application.response.investment_decision_response import InvestmentDecisionResponse
+from app.domains.investment.application.response.youtube_sentiment_response import (
+    SentimentDistribution,
+    YouTubeSentimentResponse,
+)
 from app.domains.investment.application.usecase.investment_decision_usecase import InvestmentDecisionUseCase
+from app.domains.investment.application.usecase.youtube_sentiment_usecase import YouTubeSentimentUseCase
 from app.infrastructure.cache.redis_client import redis_client
 
 router = APIRouter(prefix="/investment", tags=["investment"])
@@ -21,7 +28,14 @@ _session_adapter = RedisSessionAdapter(redis_client)
 def _resolve_account_id(
     account_id_cookie: Optional[str],
     user_token: Optional[str],
+    x_account_id: Optional[str] = None,
 ) -> Optional[int]:
+    # Swagger UI 테스트용 헤더 (X-Account-Id) 우선 확인
+    if x_account_id:
+        try:
+            return int(x_account_id)
+        except ValueError:
+            pass
     if account_id_cookie:
         try:
             return int(account_id_cookie)
@@ -42,9 +56,10 @@ async def investment_decision(
     request: InvestmentDecisionRequest,
     account_id: Optional[str] = Cookie(default=None),
     user_token: Optional[str] = Cookie(default=None),
+    x_account_id: Optional[str] = Header(default=None),
 ):
     """인증된 사용자의 투자 판단 질의를 LangGraph 멀티 에이전트로 처리한다."""
-    aid = _resolve_account_id(account_id, user_token)
+    aid = _resolve_account_id(account_id, user_token, x_account_id)
     if aid is None:
         raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
 
@@ -59,6 +74,7 @@ async def investment_decision_stream(
     request: InvestmentDecisionRequest,
     account_id: Optional[str] = Cookie(default=None),
     user_token: Optional[str] = Cookie(default=None),
+    x_account_id: Optional[str] = Header(default=None),
 ):
     """인증된 사용자의 투자 판단 질의를 SSE 스트림으로 처리한다.
 
@@ -68,7 +84,7 @@ async def investment_decision_stream(
         {"type": "error",  "data": "오류 메시지"}
         {"type": "end"}
     """
-    aid = _resolve_account_id(account_id, user_token)
+    aid = _resolve_account_id(account_id, user_token, x_account_id)
     if aid is None:
         raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
 
@@ -114,4 +130,46 @@ async def investment_decision_stream(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.post("/youtube-sentiment", response_model=YouTubeSentimentResponse)
+async def youtube_sentiment_analysis(
+    request: YouTubeSentimentRequest,
+    account_id: Optional[str] = Cookie(default=None),
+    user_token: Optional[str] = Cookie(default=None),
+    x_account_id: Optional[str] = Header(default=None),
+):
+    """저장된 YouTube 댓글로 투자 심리 지표를 산출한다.
+
+    - company: 종목명으로 최근 수집 댓글 조회 (예: "삼성전자")
+    - log_id : investment_youtube_logs.id로 특정 수집 세션 댓글 조회
+
+    둘 중 하나는 반드시 지정해야 한다. log_id 가 지정되면 company 보다 우선한다.
+
+    **Swagger 테스트**: x-account-id 헤더에 임의 숫자(예: 1) 입력
+    """
+    aid = _resolve_account_id(account_id, user_token, x_account_id)
+    if aid is None:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+
+    try:
+        adapter = YouTubeSentimentAdapter()
+        usecase = YouTubeSentimentUseCase(adapter)
+        metrics = await usecase.execute(company=request.company, log_id=request.log_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    sd = metrics.get("sentiment_distribution", {})
+    return YouTubeSentimentResponse(
+        sentiment_distribution=SentimentDistribution(
+            positive=sd.get("positive", 0.0),
+            neutral=sd.get("neutral", 1.0),
+            negative=sd.get("negative", 0.0),
+        ),
+        sentiment_score=metrics.get("sentiment_score", 0.0),
+        bullish_keywords=metrics.get("bullish_keywords", []),
+        bearish_keywords=metrics.get("bearish_keywords", []),
+        topics=metrics.get("topics", []),
+        volume=metrics.get("volume", 0),
     )
